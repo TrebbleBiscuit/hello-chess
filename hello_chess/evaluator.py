@@ -68,7 +68,7 @@ class MoveEvaluator1998:
         self.search_depth = search_depth
         self.progress = progress
         self.db_cache_move_scores = pickledb.load("move_scores_cache.db", False)
-        self.db_cache_board_eval = pickledb.load("board_eval_cache.db", False)
+        # self.db_cache_board_eval = pickledb.load("board_eval_cache.db", False)
         self.e4 = False
         self.board_evaluation = {"from_cache": 0, "evaluated": 0}
 

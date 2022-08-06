@@ -5,6 +5,7 @@ from rich.logging import RichHandler
 from rich.progress import Progress
 import chess.svg
 import sys
+import pickledb
 sys.path.append("./")
 from hello_chess.evaluator import MoveEvaluator1998
 
@@ -19,6 +20,7 @@ class ChessBot1999:
         self.board = board or chess.Board()
         self.move_count = 0
         self.human = human
+        self._db_cache_board_eval = pickledb.load("board_eval_cache.db", False)
 
     @staticmethod
     def print_position_info(board: chess.Board):
@@ -38,9 +40,11 @@ class ChessBot1999:
         """
         with Progress() as progress:
             me = MoveEvaluator1998(search_depth, progress)
-            value, move = me.minimax(self.board, search_depth)
+            me.db_cache_board_eval = self._db_cache_board_eval
+            value, move, chain = me.minimax(self.board, search_depth)
             logger.debug("me.db_cache_board_eval.dump()")
             me.db_cache_board_eval.dump()
+            logger.debug("Done dumping cache!")
             logger.debug(me.board_evaluation)
             logger.debug("Carefully selected move: %s with value %s", move, value)
             return move
