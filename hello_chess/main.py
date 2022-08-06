@@ -69,9 +69,13 @@ class MoveEvaluator1998:
     def __init__(self, search_depth: int, progress: Progress):
         self.search_depth = search_depth
         self.progress = progress
+        self.db_cache_move_scores = pickledb.load('move_scores_cache.db', False)
         self.db_cache_board_eval = pickledb.load('board_eval_cache.db', False)
-        self.db_cache_attacked_sq = pickledb.load('attacked_square_cache.db', False)
         self.e4 = False
+        self.board_evaluation = {
+            "from_cache": 0,
+            "evaluated": 0
+        }
 
         self.piece_value = {
             chess.PAWN: 100,
@@ -82,12 +86,12 @@ class MoveEvaluator1998:
         }
     
     def get_move(self, board, current_depth) -> chess.Move:
-        if board.fen() == 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1' and self.e4:
+        if self.e4 and board.fen() == 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1':
             return chess.Move.from_uci("e2e4")
-        move_eval = self.load_eval_cache(board)
-            # use the cached results to quickly select the best move
-        if move_eval is not None:
-            return max(move_eval, key=move_eval.get)
+        # move_eval = self.load_move_scores_cache(board)
+        #     # use the cached results to quickly select the best move
+        # if move_eval is not None:
+        #     return max(move_eval, key=move_eval.get)
         this_side = chess.WHITE if board.turn else chess.BLACK
         tie_moves = []
         continuing_moves = []  # these do not end the game
@@ -113,24 +117,24 @@ class MoveEvaluator1998:
         move_eval = self.score_potential_moves(board, continuing_moves, current_depth)
         if current_depth == self.search_depth:
             # only cache results that have gone to maximum depth
-            self.save_eval_cache(board, move_eval)
-            move_eval = self.randomize_eval_score(move_eval)
+            # self.save_move_scores_cache(board, move_eval)
+            move_eval = self.randomize_move_eval_score(move_eval)
         move = max(move_eval, key=move_eval.get)  # return the best move
         return move
     
-    def load_eval_cache(self, board):
-        move_eval = self.db_cache_board_eval.get(board.fen())
-        if move_eval is not False:
-            move_eval = {chess.Move.from_uci(k): v for k, v in move_eval.items()}
-            return self.randomize_eval_score(move_eval)
+    # def load_move_scores_cache(self, board):
+    #     move_eval = self.db_cache_move_scores.get(board.fen())
+    #     if move_eval is not False:
+    #         move_eval = {chess.Move.from_uci(k): v for k, v in move_eval.items()}
+    #         return self.randomize_move_eval_score(move_eval)
 
-    def save_eval_cache(self, board, move_eval):
-        serializable_move_eval = {k.uci(): v for k, v in move_eval.items()}
-        self.db_cache_board_eval.set(board.fen(), serializable_move_eval)
-        self.db_cache_board_eval.dump()
+    # def save_move_scores_cache(self, board, move_eval):
+    #     serializable_move_eval = {k.uci(): v for k, v in move_eval.items()}
+    #     self.db_cache_move_scores.set(board.fen(), serializable_move_eval)
+    #     self.db_cache_move_scores.dump()
     
     @staticmethod
-    def randomize_eval_score(move_eval):
+    def randomize_move_eval_score(move_eval):
         # add a small random amount to score so that when
         # we use max() on a bunch of options with the same
         # value it selects one randomly
@@ -179,13 +183,6 @@ class MoveEvaluator1998:
         return move_eval
         # logger.debug(move_eval)
 
-    def load__cache(self, board):
-        return self.db_cache_attacked_sq.get(board.fen())
-
-    def save_attacked_sq_cache(self, board, total_attacks_diff):
-        self.db_cache_attacked_sq.set(board.fen(), total_attacks_diff)
-
-
         
     def evaluate_material(self, board: chess.Board, side: bool) -> float:
         """Board evaluation is equal to material value minus opponent's"""
@@ -196,6 +193,13 @@ class MoveEvaluator1998:
                 return 2000
             else:
                 return -2000
+        fen = board.fen()
+        ev = self.db_cache_board_eval.get(fen)
+        if ev:
+            self.board_evaluation["from_cache"] += 1
+            return ev
+        else:
+            self.board_evaluation["evaluated"] += 1
         total_value = {
             chess.WHITE: 0,
             chess.BLACK: 0
@@ -208,41 +212,43 @@ class MoveEvaluator1998:
                     total_value[color] += PIECE_SQUARE_TABLES[piece_type][index]
                     # logger.debug("%s PST %s @ %s - %s", color, piece_type, pos,  PIECE_SQUARE_TABLES[piece_type][index])
                 total_value[color] += (len(pieces) * value)
-        return total_value[side] - total_value[not side]
+        score = total_value[side] - total_value[not side]
+        self.db_cache_board_eval.set(fen, score)
+        return score
     
 
-    def get_len_attacked_squares(self, board: chess.Board) -> dict[bool: int]:
-        """Given a board, return difference in number of attacked squares for each side
-        Positive means White is attacking more squares"""
-        cached_ta = self.load_attacked_sq_cache(board)
-        if cached_ta:
-            # logger.debug("Returned cached value %s", cached_ta)
-            return cached_ta
-        total_attacks_diff = 0
-        for color in (True, False): 
-            for piece_type in range(2, 6):
-                # exclude pawns and kings for optimization
-                for square in board.pieces(piece_type, color):
-                    total_attacks_diff += len(board.attacks(square)) * (1 if color else -1)
-            # the following seems to take significantly longer
-            # for attacker in chess.SquareSet(board.occupied_co[color]):
-            #     attacks = board.attacks(attacker)
-            #     total_attacks[color] += len(attacks)
-        self.save_attacked_sq_cache(board, total_attacks_diff)
-        return total_attacks_diff
+    # def get_len_attacked_squares(self, board: chess.Board) -> dict[bool: int]:
+    #     """Given a board, return difference in number of attacked squares for each side
+    #     Positive means White is attacking more squares"""
+    #     cached_ta = self.load_attacked_sq_cache(board)
+    #     if cached_ta:
+    #         # logger.debug("Returned cached value %s", cached_ta)
+    #         return cached_ta
+    #     total_attacks_diff = 0
+    #     for color in (True, False): 
+    #         for piece_type in range(2, 6):
+    #             # exclude pawns and kings for optimization
+    #             for square in board.pieces(piece_type, color):
+    #                 total_attacks_diff += len(board.attacks(square)) * (1 if color else -1)
+    #         # the following seems to take significantly longer
+    #         # for attacker in chess.SquareSet(board.occupied_co[color]):
+    #         #     attacks = board.attacks(attacker)
+    #         #     total_attacks[color] += len(attacks)
+    #     self.save_attacked_sq_cache(board, total_attacks_diff)
+    #     return total_attacks_diff
     
-    def get_value_attacked_pieces(self, board: chess.Board) -> dict[bool: int]:
-        """Value of pieces which are under threat by the other side"""
-        attacked_value = {
-            True: 0,
-            False: 0
-        }
-        for color in (True, False):
-            for piece_type in range(2, 6):
-                for square in board.pieces(piece_type, color):
-                    if board.is_attacked_by(not color, square):
-                        attacked_value[color] += self.piece_value[piece_type]
-        return attacked_value
+    # def get_value_attacked_pieces(self, board: chess.Board) -> dict[bool: int]:
+    #     """Value of pieces which are under threat by the other side"""
+    #     attacked_value = {
+    #         True: 0,
+    #         False: 0
+    #     }
+    #     for color in (True, False):
+    #         for piece_type in range(2, 6):
+    #             for square in board.pieces(piece_type, color):
+    #                 if board.is_attacked_by(not color, square):
+    #                     attacked_value[color] += self.piece_value[piece_type]
+    #     return attacked_value
     
 
 class ChessBot1999:
@@ -270,7 +276,9 @@ class ChessBot1999:
         with Progress() as progress:
             me = MoveEvaluator1998(search_depth, progress)
             move = me.get_move(self.board, search_depth)
-            me.db_cache_attacked_sq.dump()  # save attacked_squares cache
+            logger.debug("me.db_cache_board_eval.dump()")
+            me.db_cache_board_eval.dump()
+            logger.debug(me.board_evaluation)
             logger.debug("Carefully selected move: %s", move)
             return move
 
@@ -304,8 +312,8 @@ class ChessBot1999:
     def play_chess(self, move_threshold = 1000):
         logger.info(self.board)
         while list(self.board.legal_moves):
-            if self.move_count > move_threshold:
-                logger.warning("Move count (%s) exceeds move threshold (%s)", self.move_count, move_threshold)
+            if self.move_count >= move_threshold:
+                logger.warning("Move count (%s) reached move threshold (%s)", self.move_count, move_threshold)
                 break
             self.move_count += 1
             logger.info(f"Move {self.move_count}; it is {'White' if self.board.turn else 'Black'}'s turn")
@@ -368,10 +376,10 @@ class ChessBot1999:
             return self.make_move()
 
 if __name__ == "__main__":
-    cb = ChessBot1999(human=chess.WHITE)
-    # import cProfile
-    # cProfile.run('cb.play_chess(move_threshold=2)')
-    while cb.board.legal_moves:
-        cb.make_move()
+    cb = ChessBot1999(human=chess.BLACK)
+    import cProfile
+    cProfile.run('cb.play_chess(move_threshold=1)', sort="tottime")
+    # while cb.board.legal_moves:
+    #     cb.make_move()
     # games = {x: play_chess().outcome for x in range(5)}
     # print([g.winner for i, g in games.items()])
