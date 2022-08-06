@@ -2,6 +2,7 @@ import chess
 import logging
 import pickledb
 from rich.progress import Progress
+from random import choice
 
 logger = logging.getLogger(__name__)
 
@@ -79,25 +80,35 @@ class MoveEvaluator1998:
             chess.QUEEN: 900,
         }
 
-    def minimax(self, given_move, board, depth):
+    def minimax(self, board, depth):
         if depth == 0 or board.outcome():
-            return self.evaluate_material(board), given_move
-        if board.turn:  # white wants to maximize score
-            value = -999999
-            best_move = None
-            for move in self.get_reasonable_moves(board):
-                board.push(move)
-                value, best_move = max((value, best_move), self.minimax(move, board, depth - 1))
-                board.pop()
-            return value, best_move
-        else:  # black wants to minimize
-            value = 999999
-            best_move = None
-            for move in self.get_reasonable_moves(board):
-                board.push(move)
-                value, best_move = min((value, best_move), self.minimax(move, board, depth - 1))
-                board.pop()
-            return value, best_move
+            return self.evaluate_material(board), None
+        color_modifier = (1 if board.turn else -1)
+        value = -999999
+        best_move = None
+        # if depth == self.search_depth:
+        #     print(f"Reasonable moves for white: {self.get_reasonable_moves(board)}")
+        reasonable_moves = self.get_reasonable_moves(board)
+        if depth == self.search_depth:
+            search_task = self.progress.add_task(
+                f"Searching {len(reasonable_moves)} moves at depth {depth}",
+                total=len(reasonable_moves),
+            )
+        for move in reasonable_moves:
+            board.push(move)
+            mmv, _ = self.minimax(board, depth - 1)
+            if depth == self.search_depth:
+                self.progress.update(search_task, advance=1)
+            if mmv * color_modifier > value:
+                if depth == self.search_depth:
+                    print(f"found a better move for {'white' if board.turn else 'black'}; {move} @ {mmv}")
+                value = mmv
+                best_move = move
+            # else:
+            #     if depth == self.search_depth:
+            #         print(f"eh white move; {move} @ {mmv}")
+            board.pop()
+        return value, best_move
 
     def get_reasonable_moves(self, board):
         this_side = chess.WHITE if board.turn else chess.BLACK

@@ -4,6 +4,8 @@ import logging
 from rich.logging import RichHandler
 from rich.progress import Progress
 import chess.svg
+import sys
+sys.path.append("./")
 from hello_chess.evaluator import MoveEvaluator1998
 
 logging.basicConfig(
@@ -28,7 +30,7 @@ class ChessBot1999:
         logger.debug(f"Selecting random move: {move}")
         return move
 
-    def get_ai_move(self, search_depth=3) -> chess.Move:
+    def get_ai_move(self, search_depth=4) -> chess.Move:
         """Make moves that immediately result in victory.
         Otherwise make a move that results in check.
         Otherwise make a move that results in continuing the game.
@@ -36,7 +38,7 @@ class ChessBot1999:
         """
         with Progress() as progress:
             me = MoveEvaluator1998(search_depth, progress)
-            value, move = me.minimax(None, self.board, search_depth)
+            value, move = me.minimax(self.board, search_depth)
             logger.debug("me.db_cache_board_eval.dump()")
             me.db_cache_board_eval.dump()
             logger.debug(me.board_evaluation)
@@ -118,7 +120,8 @@ class ChessBot1999:
                     self.board.pop()
                     self.move_count -= 2
                     logger.info("Performed takeback!")
-                    return
+                    logger.info(self.board)
+                    return move_selection()
             else:
                 move = self.get_ai_move()
             return move
@@ -147,10 +150,10 @@ class ChessBot1999:
 
 
 if __name__ == "__main__":
-    cb = ChessBot1999(human=chess.BLACK)
+    cb = ChessBot1999(human=chess.WHITE)  # human=chess.BLACK
     # import cProfile
     # cProfile.run('cb.play_chess(move_threshold=1)', sort="tottime")
-    # while cb.board.legal_moves:
-    cb.make_move()
+    while cb.board.legal_moves:
+        cb.make_move()
     # games = {x: play_chess().outcome for x in range(5)}
     # print([g.winner for i, g in games.items()])
