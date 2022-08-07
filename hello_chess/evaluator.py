@@ -2,7 +2,7 @@ import chess
 import logging
 import pickledb
 from rich.progress import Progress
-from random import choice
+from random import shuffle
 
 logger = logging.getLogger(__name__)
 
@@ -67,10 +67,13 @@ class MoveEvaluator1998:
     def __init__(self, search_depth: int, progress: Progress):
         self.search_depth = search_depth
         self.progress = progress
-        self.db_cache_move_scores = pickledb.load("move_scores_cache.db", False)
-        # self.db_cache_board_eval = pickledb.load("board_eval_cache.db", False)
+        # self.db_cache_mm = pickledb.load("mm_cache.db", False)
+        # self.db_cache_board_eval = pickledb.load("board_eval_cache.db", False)  moved to chessbot
         self.e4 = False
         self.board_evaluation = {"from_cache": 0, "evaluated": 0}
+        self.cache_min_depth = 3
+        self.total_trimmed_moves = 0
+        self.caches_read = {x+1: 0 for x in range(3)}
 
         self.piece_value = {
             chess.PAWN: 100,
@@ -80,35 +83,90 @@ class MoveEvaluator1998:
             chess.QUEEN: 900,
         }
 
-    def minimax(self, board, depth):
+    def minimax(self, board, depth, alpha, beta, player, move_chain = None):
+        if depth >= self.cache_min_depth:
+            cache_key = board.fen() + " " + str(depth) + " " + str(player)
+            cache_value = self.db_cache_mm.get(cache_key)
+            if cache_value is not False:
+                value = cache_value[0]
+                best_move = chess.Move.from_uci(cache_value[1])
+                # logger.info(f"Read from cache {cache_key}: {cache_value}")
+                return value, best_move, []
         if depth == 0 or board.outcome():
-            return self.evaluate_material(board), None
-        color_modifier = (1 if board.turn else -1)
-        value = -999999
-        best_move = None
+            return self.evaluate_material(board), None, move_chain
+        if player:
+            color_modifier = 1
+            value = -999999
+        else:
+            color_modifier = -1
+            value = 999999
+        if move_chain is None:
+            move_chain = []
         # if depth == self.search_depth:
         #     print(f"Reasonable moves for white: {self.get_reasonable_moves(board)}")
         reasonable_moves = self.get_reasonable_moves(board)
+        if depth == self.search_depth:
+            logger.debug(f"Searching {len(list(reasonable_moves))} reasonable moves")
         if depth == self.search_depth:
             search_task = self.progress.add_task(
                 f"Searching {len(reasonable_moves)} moves at depth {depth}",
                 total=len(reasonable_moves),
             )
         for move in reasonable_moves:
+            # if depth == self.search_depth:
+            #     logger.debug(f"Trying move {move}")
             board.push(move)
-            mmv, _ = self.minimax(board, depth - 1)
+            mm_val, _, nmc = self.minimax(board, depth - 1, alpha, beta, not player, move_chain + [move])
             if depth == self.search_depth:
                 self.progress.update(search_task, advance=1)
-            if mmv * color_modifier > value:
+            # determine whether this branch is higher value than the best one currently known
+            # if mm_val * color_modifier > value:
+            #     if depth == self.search_depth:
+            #         print(f"found a better move for {'white' if player else 'black'}; {move} @ {mm_val}")
+            #     value = mm_val
+            #     best_move = move
+            # alpha-beta pruning
+            # logger.debug("mm_val is %s, value is %s, player is %s", mm_val, value, player)
+            def print_found_better_move():
                 if depth == self.search_depth:
-                    print(f"found a better move for {'white' if board.turn else 'black'}; {move} @ {mmv}")
-                value = mmv
-                best_move = move
+                    logger.debug(f"L{depth}: Found a better move for {'white' if player else 'black'}; {move} @ {mm_val} - {nmc}")
+                    
+            if player:
+                if mm_val > value:
+                    print_found_better_move()
+                    value = mm_val
+                    best_move = move
+                    best_move_chain = nmc
+                if value >= beta:
+                    board.pop()
+                    self.total_trimmed_moves += 1
+                    break
+                if value > alpha:
+                    # logger.debug("alpha %s -> %s", alpha, value)
+                    alpha = value
+            else:
+                if mm_val < value:
+                    print_found_better_move()
+                    value = mm_val
+                    best_move = move
+                    best_move_chain = nmc
+                if value <= alpha:
+                    board.pop()
+                    self.total_trimmed_moves += 1
+                    break
+                if value < beta:
+                    # logger.debug("beta %s -> %s", beta, value)
+                    beta = value
+
             # else:
             #     if depth == self.search_depth:
-            #         print(f"eh white move; {move} @ {mmv}")
+            #         print(f"eh white move; {move} @ {mm_val}")
             board.pop()
-        return value, best_move
+        if depth >= self.cache_min_depth:
+            # logger.debug(f"Added to MM cache {cache_key}:{cache_value}")
+            cache_value = [value, best_move.uci()]
+            self.db_cache_mm.set(cache_key, cache_value)
+        return value, best_move, best_move_chain
 
     def get_reasonable_moves(self, board):
         this_side = chess.WHITE if board.turn else chess.BLACK
@@ -132,6 +190,7 @@ class MoveEvaluator1998:
             board.pop()  # undo move
         if not continuing_moves:
             return [tie_moves[0]]
+        shuffle(continuing_moves)
         return continuing_moves
 
     # def get_move(self, board, current_depth) -> chess.Move:
@@ -248,7 +307,7 @@ class MoveEvaluator1998:
     def evaluate_material(self, board: chess.Board) -> float:
         """Board evaluation is equal to material value minus opponent's"""
         if board.outcome():
-            if not board.outcome().winner:  # tie
+            if board.outcome().winner is None:  # tie
                 return 0
             if board.outcome().winner:
                 return 20000

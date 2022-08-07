@@ -16,11 +16,13 @@ logger = logging.getLogger(__name__)
 
 
 class ChessBot1999:
-    def __init__(self, board=None, human: bool | None = None):
+    def __init__(self, board=None, human: bool | None = None, search_depth: int = 4):
         self.board = board or chess.Board()
         self.move_count = 0
         self.human = human
+        self._db_cache_mm = pickledb.load("mm_cache.db", False)
         self._db_cache_board_eval = pickledb.load("board_eval_cache.db", False)
+        self.search_depth = search_depth
 
     @staticmethod
     def print_position_info(board: chess.Board):
@@ -32,21 +34,25 @@ class ChessBot1999:
         logger.debug(f"Selecting random move: {move}")
         return move
 
-    def get_ai_move(self, search_depth=4) -> chess.Move:
+    def get_ai_move(self) -> chess.Move:
         """Make moves that immediately result in victory.
         Otherwise make a move that results in check.
         Otherwise make a move that results in continuing the game.
         Otherwise make a move that results in stalemate.
         """
         with Progress() as progress:
-            me = MoveEvaluator1998(search_depth, progress)
+            me = MoveEvaluator1998(self.search_depth, progress)
+            me.db_cache_mm = self._db_cache_mm
             me.db_cache_board_eval = self._db_cache_board_eval
-            value, move, chain = me.minimax(self.board, search_depth)
-            logger.debug("me.db_cache_board_eval.dump()")
-            me.db_cache_board_eval.dump()
-            logger.debug("Done dumping cache!")
+            value, move, chain = me.minimax(self.board, self.search_depth, -999999, 999999, self.board.turn)
             logger.debug(me.board_evaluation)
+            logger.debug(f"Trimmed {me.total_trimmed_moves} trees during evaluation")
             logger.debug("Carefully selected move: %s with value %s", move, value)
+            # logger.debug("me.db_cache_board_eval.dump()")
+            # me.db_cache_board_eval.dump()
+            logger.debug("DUMPING CACHE, DO NOT INTERRUPT...")
+            me.db_cache_mm.dump()
+            logger.debug("Done dumping cache!")
             return move
 
     @staticmethod
@@ -92,16 +98,6 @@ class ChessBot1999:
             logger.info(
                 f"Move {self.move_count}; it is {'White' if self.board.turn else 'Black'}'s turn"
             )
-            # if self.board.turn:
-            #     # white is dumb
-            #     # move = make_random_move(self.board)
-            #     move = human_chess_move(self.board)
-            #     if move == "takeback":
-            #         self.board.pop()
-            #         self.board.pop()
-            #         i-=2
-            #         continue
-            # else:
             move = self.get_ai_move()
             logger.info(f"Making move {move}")
             self.board.push(move)
@@ -153,11 +149,42 @@ class ChessBot1999:
             return self.make_move()
 
 
+SOME_FENS = [
+    "rnbqkbnr/pp1ppppp/8/2p5/4P3/5N2/PPPP1PPP/RNBQKB1R b KQkq - 1 2",   # e4 c5 Nf3
+    "rnbqkbnr/pp2pppp/3p4/2p5/4P3/5N2/PPPP1PPP/RNBQKB1R w KQkq - 0 3",  # e4 c5 Nf3 d6
+    "r1bqkbnr/pppp1ppp/2n5/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R w KQkq - 2 3", # e4 e5 Nf3 Nc6 
+    "rnbqkbnr/pppp1ppp/4p3/8/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2",     # e4 e6 
+    "rnbqkbnr/pppppppp/8/8/3P4/8/PPP1PPPP/RNBQKBNR b KQkq d3 0 1",      # d4
+    "rnbqkb1r/pppppppp/5n2/8/2PP4/8/PP2PPPP/RNBQKBNR b KQkq c3 0 2",    # d4 Nf6 c4
+    "rnbqkbnr/ppp1pppp/8/3p4/2PP4/8/PP2PPPP/RNBQKBNR b KQkq c3 0 2",    # d4 d5 c4
+    "rnbqkb1r/pppppppp/5n2/8/2P5/5N2/PP1PPPPP/RNBQKB1R b KQkq c3 0 2",  # Nf3 Nf6 c4  (english)
+]
+from random import shuffle
+shuffle(SOME_FENS)
+
+def train():
+    for depth in [4, 6]:
+        for fen in SOME_FENS:
+            logger.info(f"Preparing to evaluate moves at depth {depth} from: {fen}")
+            cb = ChessBot1999(board=chess.Board(fen), search_depth=depth)
+            for x in range(16):
+                if cb.board.legal_moves:
+                    cb.make_move()
+            logger.info(f"This game's outcome: {cb.board.outcome()}")
+    
+    cb = ChessBot1999(board=chess.Board(fen), search_depth=8)
+    for x in range(8):
+        if cb.board.legal_moves:
+            cb.make_move()
+
 if __name__ == "__main__":
-    cb = ChessBot1999(human=chess.WHITE)  # human=chess.BLACK
-    # import cProfile
-    # cProfile.run('cb.play_chess(move_threshold=1)', sort="tottime")
-    while cb.board.legal_moves:
-        cb.make_move()
-    # games = {x: play_chess().outcome for x in range(5)}
-    # print([g.winner for i, g in games.items()])
+    train()
+
+
+    # cb = ChessBot1999(human=chess.BLACK)  # human=chess.BLACK
+    # # import cProfile
+    # # cProfile.run('cb.play_chess(move_threshold=1)', sort="tottime")
+    # while cb.board.legal_moves:
+    #     cb.make_move()
+    # # games = {x: play_chess().outcome for x in range(5)}
+    # # print([g.winner for i, g in games.items()])
