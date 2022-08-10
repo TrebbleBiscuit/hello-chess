@@ -40,6 +40,8 @@ class ChessBot1999:
                 logger.debug("Loading opening book file %s; %s bytes...", opening_book, opening_book.stat().st_size)
                 with open(opening_book, 'r') as f:
                     self.opening_book = json.load(f)
+            else:
+                self.opening_book = {}
         else:
             self.opening_book = {}
 
@@ -106,13 +108,13 @@ class ChessBot1999:
             me.db_cache_mm = self._db_cache_mm
             me.db_cache_board_eval = self._db_cache_board_eval
 
-            move, assessment = me.iterative_search(self.board, self.board.turn, max_depth = self.search_depth)
+            move, value = me.iterative_search(self.board, self.board.turn, max_depth = self.search_depth)
 
             # value, move_list, chain = me.minimax(self.board, self.search_depth, -999999, 999999, self.board.turn)
             # move_list.sort(key=lambda x: -int(list(x.values())[0]))
             # logger.debug(move_list)
-            for value in assessment[0].values():
-                ...  # just defining move and value of best move to use later
+            # for value in assessment[0].values():
+            #     ...  # just defining move and value of best move to use later
             # assert value == value2
 
             # logger.debug(me.board_evaluation)
@@ -205,6 +207,7 @@ class ChessBot1999:
         logger.info(
             f"Move {self.move_count}; it is {'white' if self.board.turn else 'black'}'s turn"
         )
+        logger.info("Board fen: %s", self.board.fen())
         move = move_selection()
         logger.info("%s moves %s", "White" if self.board.turn else "Black", move)
         self.board.push(move)
@@ -295,12 +298,9 @@ def train():
 
 if __name__ == "__main__":
     # train()
-
-
-    cb = ChessBot1999(board=chess.Board("r1bqkb1r/pppp1ppp/2n5/8/2nPp3/N4N2/PPP2PPP/R1BQ1RK1 w kq - 0 8"), human=chess.BLACK, search_depth=4, opening_book=Path("opening_book_20-10.json"))  # human=chess.BLACK
+    cb = ChessBot1999(board=chess.Board(), human=chess.BLACK, search_depth=4, opening_book=Path("opening_book_20-10.json"))  # human=chess.BLACK
     while cb.board.legal_moves:
         cb.make_move()
-        # input()
     logger.info(cb.board.outcome())
     # # import cProfile
     # # cProfile.run('cb.play_chess(move_threshold=1)', sort="tottime")

@@ -105,30 +105,37 @@ class MoveEvaluator1998:
             chess.KING: 10000,
         }
     
-    def iterative_search(self, board, player: bool, max_depth=4, moves = None):
+    def iterative_search(self, board, player: bool, max_depth=None, moves = None):
         tsd = self.search_depth
-        for depth in range(2, max_depth+1):
-            self.search_depth = depth
-            value, move_assessments, move_chain = self.minimax(board, depth, -999999, 999999, player=player, moves=moves)
-            move_assessments.sort(key=lambda x: -int(list(x.values())[0]), reverse = not player)
-            moves = [list(x.keys())[0] for x in move_assessments]
-            logger.debug(f"Depth {depth} - {move_assessments}")
-        self.search_depth = tsd
-        # Given a bunch of equal moves, pick one at random
-        max_seen = -9999999
-        multi = (1 if player else -1)
-        for movedict in move_assessments:
-            for mv, val in movedict.items():
-                if val * multi > max_seen:
-                    max_seen = val * multi
-                    best_moves = [mv]
-                elif val * multi == max_seen:
-                    best_moves.append(mv)
-        if len(best_moves) > 1:
-            logger.debug("Choosing from %s identically scored moves", len(best_moves))
-            # logger.debug("DEBUG FEATURE: extra evaluation enabled on identically scored moves")
-            # return self.iterative_search(board, player, max_depth+2)
-        return chess.Move.from_uci(choice(best_moves)), move_assessments
+        if not max_depth:
+            max_depth = self.search_depth
+        value, move = self.search_and_evaluate(board, -999999, 999999, max_depth, moves)
+        return move, value
+        # for depth in range(2, max_depth+1):
+        #     self.search_depth = depth
+            
+            # value, move_assessments, move_chain = self.minimax(board, depth, -999999, 999999, player=player, moves=moves)
+        #     move_assessments.sort(key=lambda x: -int(list(x.values())[0]), reverse = False)
+        #     moves = [list(x.keys())[0] for x in move_assessments]
+        #     logger.debug(f"Depth {depth} - {move_assessments}")
+        # self.search_depth = tsd
+        # # Given a bunch of equal moves, pick one at random
+        # max_seen = -9999999
+        # # multi = (1 if player else -1)
+        # logger.info("hey move value is %s", value)
+        # for movedict in move_assessments:
+        #     for mv, val in movedict.items():
+        #         if val > max_seen:
+        #             max_seen = val
+        #             best_moves = [mv]
+        #         elif val == max_seen:
+        #             best_moves.append(mv)
+        # if len(best_moves) > 1:
+        #     logger.debug("Choosing from %s identically scored moves", len(best_moves))
+        #     # logger.debug("DEBUG FEATURE: extra evaluation enabled on identically scored moves")
+        #     # return self.iterative_search(board, player, max_depth+2)
+        # return chess.Move.from_uci(choice(best_moves)), move_assessments
+        # return chess.Move.from_uci(move), None
     
     def get_minimax_cached_value(self, fen: str, depth: int, player: bool):
         """Even if we're only looking through depth n, check cache for up to depth n+2
@@ -165,7 +172,6 @@ class MoveEvaluator1998:
                 return value, cache_value, []
         # at zero depth, return evaluation of board
         if depth == 0 or board.outcome():
-            # TODO: deeper for captures
             value, cap_depth = self.evaluate_with_captures(board, alpha, beta)
             if cap_depth > 500:
                 logger.debug("Evaluated captures with maximum depth %s", cap_depth)
@@ -301,7 +307,10 @@ class MoveEvaluator1998:
                 continuing_moves.append(move)
             board.pop()  # undo move
         if not continuing_moves:
+            if not board.legal_moves:
+                return []
             return [tie_moves[0]]
+            
         return self.order_moves(board, continuing_moves)
 
 
@@ -320,7 +329,7 @@ class MoveEvaluator1998:
             this_piece_type = board.piece_at(move.from_square).piece_type
             captured_piece = board.piece_at(move.to_square)
             if captured_piece:
-                score += (self.piece_value[captured_piece.piece_type] - int(self.piece_value[this_piece_type] * 0.2))
+                score += (self.piece_value[captured_piece.piece_type] - int(self.piece_value[this_piece_type] * 0.8))
             move_scores[move] = score
 
             # # moving valuable pieces away from attacked squares is good
@@ -449,9 +458,9 @@ class MoveEvaluator1998:
             if board.outcome().winner is None:  # tie
                 return 0
             if board.outcome().winner:
-                return 20000
+                return 55555
             else:
-                return -20000
+                return -55555
         # CACHE 1/2
         # fen = board.fen()
         # ev = self.db_cache_board_eval.get(fen)
@@ -461,16 +470,25 @@ class MoveEvaluator1998:
         # else:
         #     self.board_evaluation["evaluated"] += 1
         total_value = 0
+        if board.is_check():
+            check_value = 20  # delivering check is worth this much
+            if board.turn:
+                total_value -= check_value
+            else:
+                total_value += check_value
         for color in (True, False):
             for piece_type, value in self.piece_value.items():
                 pieces = board.pieces(piece_type, color)
                 for pos in pieces:
                     index = (-pos - 1) if color else pos
-                    total_value += PIECE_SQUARE_TABLES[piece_type][index] * (
+                    pstv = PIECE_SQUARE_TABLES[piece_type][index] * (
                         1 if color else -1
                     )
+                    total_value += pstv
                     # logger.debug("%s PST %s @ %s - %s", color, piece_type, pos,  PIECE_SQUARE_TABLES[piece_type][index])
-                total_value += (len(pieces) * value) * (1 if color else -1)
+                piece_val = (len(pieces) * value) * (1 if color else -1)
+                total_value += piece_val
+                
         # CACHE 2/2
         # self.db_cache_board_eval.set(fen, total_value)
         return total_value
@@ -511,43 +529,82 @@ class MoveEvaluator1998:
     @staticmethod
     def get_capture_moves(board):
         capture_moves = []
-        for move in board.legal_moves:
+        legal_moves = board.legal_moves
+        for move in legal_moves:
             captured_piece = board.piece_at(move.to_square)
             if captured_piece and captured_piece.color != board.turn:
                 capture_moves.append(move)
+            # board.push(move)
+            # if board.is_check():
+            #     capture_moves.append(move)
+            # board.pop()
         return capture_moves
 
     def evaluate_with_captures(self, board, alpha, beta, depth=1):
+        # here depth counts up instead of down; there is no depth limit
         if depth % 100000 == 0:
             logger.debug("Evaluating with captures; depth=%s", depth)
+        # perhaps the best possible move is not a capture
+        # evaluate board at current position to consider that case
         evaluation = self.evaluate_material(board)
-
-        if board.turn:
-            if evaluation >= beta:
-                return beta, depth
-            if evaluation > alpha:
-                alpha = evaluation
-        else:
-            if evaluation <= alpha:
-                return alpha, depth
-            if evaluation < beta:
-                beta = evaluation
-
+        if not board.turn:
+            evaluation = evaluation * -1
+        if evaluation >= beta:
+            self.total_trimmed_moves += 1
+            return beta, depth
+        if evaluation > alpha:
+            alpha = evaluation
         capture_moves = self.get_capture_moves(board)
         if capture_moves:
-            # if depth % 200000 == 0:
-            #     logger.debug(board.fen())
-            #     logger.debug(board.move_stack)
-            #     logger.debug(capture_moves)
             for move in self.order_moves(board, capture_moves):
                 board.push(move)
-                evaluation, depth = self.evaluate_with_captures(board, alpha, beta, depth+1)
+                evaluation, depth = self.evaluate_with_captures(board, -beta, -alpha, depth+1)
+                evaluation = -evaluation
                 board.pop()
                 if evaluation >= beta:
+                    self.total_trimmed_moves += 1
                     return beta, depth
                 if evaluation > alpha:
                     alpha = evaluation
-        if board.fen() == 'r1bqkb1r/pppp1ppp/2n5/8/2NP4/5N2/PPp2PPP/R1B2RK1 w kq - 0 10':
-            logger.info("Evaluating 'r1bqkb1r/pppp1ppp/2n5/8/2NP4/5N2/PPp2PPP/R1B2RK1 w kq - 0 10'")
-            logger.info("Alpha: %s; Beta: %s", alpha, beta)
+        # return evaluation, depth
         return alpha, depth
+
+    def search_and_evaluate(self, board, alpha, beta, depth, moves = None):
+        # move_assessments = []
+        if not moves:
+            moves = self.get_reasonable_moves(board)
+        if depth == 0 or not moves:
+            value, depth = self.evaluate_with_captures(board, alpha, beta)
+            if not board.turn:
+                value = value * -1
+            return value, None
+        if depth == self.search_depth:
+            search_task = self.progress.add_task(
+                f"Searching {len(moves)} moves at depth {depth}",
+                total=len(moves),
+            )
+        best_move = None
+        for move in moves:
+            if isinstance(move, str):
+                move = chess.Move.from_uci(move)
+            board.push(move)
+            evaluation, _ = self.search_and_evaluate(board, -beta, -alpha, depth-1)
+            evaluation = -evaluation
+            # move_assessments.append({str(move): evaluation})
+            board.pop()
+            if depth == self.search_depth:
+                self.progress.update(search_task, advance=1)
+            if evaluation >= beta:
+                self.total_trimmed_moves += 1
+                return beta, None
+            if evaluation > alpha:
+                if depth == self.search_depth:
+                    logger.debug(f"D%s - %s @ %s is new best", depth, move, evaluation)
+                alpha = evaluation
+                best_move = move
+        if depth == self.search_depth:
+            self.progress.update(search_task, visible=False)
+        # TODO: should return alpha actually i htink
+        # return evaluation, move_assessments
+        return alpha, best_move  # move_assessments
+
